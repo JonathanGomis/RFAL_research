@@ -1,0 +1,146 @@
+<launch>
+  <arg name="use_sim_time" default="true" />
+  <arg name="gui" default="true" />
+  <arg name="headless" default="false" />
+  <arg name="world" default="$(find jackal_velodyne)/worlds/cylinders.world" />
+
+
+
+
+  <!-- Short-term hack to support the original front_laser:=true argument for spawning
+       the simulator. This will be removed in favour of using the config:=x arg instead. -->
+  <arg name="front_laser" default="true" />
+  <arg name="default_config" value="front_laser" if="$(arg front_laser)" />
+  <arg name="default_config" value="base" unless="$(arg front_laser)" />
+  <!-- end of hack -->
+
+
+
+
+  <!-- Configuration of Jackal which you would like to simulate.
+       See jackal_description for details. -->
+  <arg name="config" default="$(arg default_config)" />
+
+
+
+
+  <!-- Launch Gazebo with the specified world -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="debug" value="0" />
+    <arg name="gui" value="$(arg gui)" />
+    <arg name="use_sim_time" value="$(arg use_sim_time)" />
+    <arg name="headless" value="$(arg headless)" />
+    <arg name="world" value="$(arg world)" />
+  </include>
+
+
+<!-- To avoid several different state publishers pushing to the same topic we removed "robot_state_publisher .........state_publisher" -->
+
+  <!-- Load Jackal's description-->
+  <param name="robot_description"
+         command="$(find jackal_description)/scripts/env_run
+                    $(find jackal_description)/urdf/configs/$(arg config)
+                    $(find xacro)/xacro $(find jackal_velodyne)/urdf/jackal_velodyne.urdf.xacro
+                    --inorder" />
+  <!-- <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" /> -->
+
+
+<!-- Within the jackal_control package you must remove the "robot_localization" reference -->
+
+  <!-- Control -->
+<rosparam command="load" file="$(find jackal_control)/config/control.yaml" />
+  <node name="controller_spawner" pkg="controller_manager" type="spawner"
+ 	 args="jackal_joint_publisher jackal_velocity_controller" />
+  <node pkg="twist_mux" type="twist_mux" name="twist_mux">
+    <rosparam command="load" file="$(find jackal_control)/config/twist_mux.yaml" />
+    <remap from="cmd_vel_out" to="jackal_velocity_controller/cmd_vel"/>
+  </node>
+
+  <arg name="joy_dev" default="/dev/input/js0" />
+  <arg name="joystick" default="true" />
+
+  <group ns="bluetooth_teleop" if="$(arg joystick)">
+    <group unless="$(optenv JACKAL_PS3 0)" >
+      <rosparam command="load" file="$(find jackal_control)/config/teleop_ps4.yaml" />
+    </group>
+
+    <group if="$(optenv JACKAL_PS3 0)" >
+      <rosparam command="load" file="$(find jackal_control)/config/teleop.yaml" />
+      <param name="joy_node/dev" value="$(arg joy_dev)" />
+    </group>
+
+    <node pkg="joy" type="joy_node" name="joy_node" />
+    <node pkg="teleop_twist_joy" type="teleop_node" name="teleop_twist_joy"/>
+  </group>
+
+  <node pkg="interactive_marker_twist_server" type="marker_server" name="twist_marker_server"/>
+    <arg name="joystick" value="false"/>
+  </include>
+
+
+
+
+  <!-- Spawn Jackal -->
+  <node name="urdf_spawner" pkg="gazebo_ros" type="spawn_model"
+              args="-urdf -model jackal -param robot_description -x -8.5 -y 0 -z 2" />
+
+
+
+
+    <!--- Sim Time -->
+    <param name="/use_sim_time" value="true" />
+
+
+
+
+    <!--- TF -->
+    <node pkg="tf" type="static_transform_publisher" name="velodyne_base_link" args="0 0 0 0 0 0 /base_link /velodyne 10" />
+    <node pkg="tf" type="static_transform_publisher" name="camera_init_to_map"  args="0 0 0 1.570795   0        1.570795 /map    /camera_init 10" />
+    <node pkg="tf" type="static_transform_publisher" name="base_link_to_camera" args="0 0 0 -1.570795 -1.570795 0        /camera /base_link   10" />
+
+
+
+
+    <!--- Lidar Odometry -->    
+    <node pkg="lego_loam" type="imageProjection"    name="imageProjection"    output="screen"/>
+    <node pkg="lego_loam" type="featureAssociation" name="featureAssociation" output="screen"/>
+    <node pkg="lego_loam" type="mapOptmization"     name="mapOptmization"     output="screen"/>
+    <node pkg="lego_loam" type="transformFusion"    name="transformFusion"    output="screen"/>
+
+
+
+
+    <!--- Run Rviz (launch-prefix="nice" for lower cpu usage)-->
+    <node pkg="rviz" type="rviz" name="rviz" output="log" args="-d $(find traversability_mapping)/launch/include/traversability_mapping.rviz" />
+    
+
+
+
+    <!--- Run Traversability Mapping -->    
+    <node pkg="traversability_mapping" type="traversability_filter"  name="traversability_filter"  output="screen"/>
+    <node pkg="traversability_mapping" type="traversability_map"     name="traversability_map"     output="screen"/>
+    <node pkg="traversability_mapping" type="traversability_prm"     name="traversability_prm"     output="screen"/>
+    <!-- <node pkg="traversability_mapping" type="traversability_path"    name="traversability_path"    output="screen"/> -->
+ 
+
+
+
+    <!--- Run Move Base -->
+    <include file="$(find traversability_mapping)/launch/include/move_base.launch" />
+
+<!-- sudo apt install ros-kinetic-octomap ros-kinetic-octomap-server    remap from cloud_in to velodyine_points to maintain communication with existing topics -->
+
+    <!-- Octomap Visulaization -->
+    <node pkg="octomap_server" type="octomap_server_node" name="octomap_server">
+    <param name="resolution" value="0.05" />
+    <param name="frame_id" type="string" value="map" />
+    <!-- maximum range to integrate (speedup!) -->
+    <param name="sensor_model/max_range" value="5.0" />
+    <!-- data source to integrate (PointCloud2) -->
+    <remap from="cloud_in" to="/velodyne_points" />
+    </node>
+
+
+
+
+</launch>
